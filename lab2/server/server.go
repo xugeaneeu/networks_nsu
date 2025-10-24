@@ -1,4 +1,3 @@
-// server.go
 package main
 
 import (
@@ -9,19 +8,57 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-	port = flag.Int("port", 9000, "TCP port to listen on")
+	port        = flag.Int("port", 9000, "TCP port to listen on")
+	metricsPort = flag.Int("metrics-port", 2112, "HTTP port to serve Prometheus metrics")
 )
+
+var (
+	bytesReceived = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "file_server_bytes_received_total",
+		Help: "Total number of bytes received by the server",
+	})
+	fileTransfers = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "file_server_transfers_total",
+		Help: "Total number of completed file transfers",
+	})
+	transferDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "file_server_transfer_duration_seconds",
+		Help:    "Histogram of file transfer durations in seconds",
+		Buckets: prometheus.DefBuckets,
+	})
+	activeConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "file_server_active_connections",
+		Help: "Current number of active client connections",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(bytesReceived, fileTransfers, transferDuration, activeConnections)
+}
 
 func main() {
 	flag.Parse()
+
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		addr := fmt.Sprintf(":%d", *metricsPort)
+		log.Printf("metrics endpoint listening on %s/metrics", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			log.Fatalf("metrics HTTP server failed: %v", err)
+		}
+	}()
 
 	uploadDir := "uploads"
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
@@ -54,6 +91,9 @@ func main() {
 
 func handleConnection(conn net.Conn, uploadDir string) {
 	defer conn.Close()
+
+	activeConnections.Inc()
+	defer activeConnections.Dec()
 
 	r := bufio.NewReader(conn)
 
@@ -142,6 +182,7 @@ func handleConnection(conn net.Conn, uploadDir string) {
 				break
 			} else {
 				atomic.AddUint64(&totalRead, uint64(wn))
+				bytesReceived.Add(float64(wn))
 				left -= uint64(wn)
 			}
 		}
@@ -161,6 +202,15 @@ func handleConnection(conn net.Conn, uploadDir string) {
 	if success && atomic.LoadUint64(&totalRead) != fileSize {
 		log.Printf("[%s] size mismatch: expected %d, got %d", conn.RemoteAddr(), fileSize, atomic.LoadUint64(&totalRead))
 		success = false
+	}
+
+	duration := time.Since(start).Seconds()
+	transferDuration.Observe(duration)
+	if success {
+		fileTransfers.Inc()
+		log.Printf("[%s] received %q (%d bytes) → %s", conn.RemoteAddr(), filename, fileSize, dstPath)
+	} else {
+		log.Printf("[%s] failed to receive %q", conn.RemoteAddr(), filename)
 	}
 
 	var resp byte
