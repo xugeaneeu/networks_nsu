@@ -4,16 +4,19 @@ import (
 	"bufio"
 	"encoding/binary"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 var (
 	serverAddr = flag.String("addr", "localhost:9000", "server address host:port")
 	filePath   = flag.String("file", "", "path to the file to send")
+	timeout    = flag.Duration("timeout", 10*time.Second, "connection timeout")
 )
 
 func main() {
@@ -45,7 +48,7 @@ func main() {
 	}
 	nameLen := uint16(len(nameBytes))
 
-	conn, err := net.Dial("tcp", *serverAddr)
+	conn, err := net.DialTimeout("tcp", *serverAddr, *timeout)
 	if err != nil {
 		log.Fatalf("dial failed: %v", err)
 	}
@@ -82,5 +85,21 @@ func main() {
 		log.Fatalf("flush body failed: %v", err)
 	}
 
-	log.Printf("sent %q (%d bytes) successfully", filename, fileSize)
+	log.Printf("sent %q (%d bytes) successfully, waiting for server response...", filename, fileSize)
+
+	resp := make([]byte, 1)
+	conn.SetReadDeadline(time.Now().Add(*timeout))
+	n, err := conn.Read(resp)
+	if err != nil {
+		log.Fatalf("failed to read response from server: %v", err)
+	}
+	if n != 1 {
+		log.Fatalf("unexpected response length: %d", n)
+	}
+
+	if resp[0] == 1 {
+		fmt.Println("File transfer successful")
+	} else {
+		fmt.Println("File transfer failed")
+	}
 }
