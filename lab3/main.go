@@ -241,7 +241,6 @@ func fetchLocationData(parCtx context.Context, c *http.Client, loc location) <-c
 		}
 
 		places := placesRes.value
-		// If no places, return combined immediately
 		if len(places) == 0 {
 			cr := combinedResult{
 				loc:     loc,
@@ -260,7 +259,6 @@ func fetchLocationData(parCtx context.Context, c *http.Client, loc location) <-c
 				select {
 				case dr := <-dch:
 					if dr.err != nil {
-						// Forward error
 						descCh <- result[placeWithDescription]{err: fmt.Errorf("desc error for %s: %w", pl.title, dr.err)}
 						return
 					}
