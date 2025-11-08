@@ -15,7 +15,12 @@ import (
 )
 
 const (
-	base_search_loc = "https://nominatim.openstreetmap.org/search"
+	base_search_loc  = "https://nominatim.openstreetmap.org/search"
+	base_loc_weather = "https://api.openweathermap.org/data/2.5/weather"
+	base_places_rad  = "https://api.opentripmap.com/0.1/en/places/radius"
+	base_places_desc = "https://api.opentripmap.com/0.1/en/places/xid"
+	weather_api      = "61830c85edede72ef3e2370183046ded"
+	places_api       = "5ae2e3f221c38a28845f05b690ad0322c99ae7a08b86329344ce381a"
 )
 
 type result[T any] struct {
@@ -31,18 +36,17 @@ type location struct {
 }
 
 type weather struct {
-	temp        float64
-	windSpeed   float64
-	windDir     float64
-	weatherCode int
-	time        string
+	temp      float64
+	feels     float64
+	windSpeed float64
+	windGusts float64
 }
 
 type place struct {
-	pageId int
-	title  string
-	lat    float64
-	lon    float64
+	xid   string
+	title string
+	lat   float64
+	lon   float64
 }
 
 type placeWithDescription struct {
@@ -111,8 +115,8 @@ func main() {
 	cr := result.value
 	fmt.Println("---- Результат ----")
 	fmt.Printf("Локация: %s\n", cr.loc.name)
-	fmt.Printf("Погода (время %s): Температура %.1f°C, Ветер %.1f m/s, Направление %.0f°, Код %d\n",
-		cr.weather.time, cr.weather.temp, cr.weather.windSpeed, cr.weather.windDir, cr.weather.weatherCode)
+	fmt.Printf("Погода : Температура %.1f°C, Ощущается %.1f°C, Скорость %.1f m/s, Порывы %.1f m/s\n",
+		cr.weather.temp, cr.weather.feels, cr.weather.windSpeed, cr.weather.windGusts)
 	fmt.Printf("Найдено интересных мест: %d\n", len(cr.places))
 	for i, pw := range cr.places {
 		fmt.Printf("\n[%d] %s (lat %.6f lon %.6f)\n", i, pw.place.title, pw.place.lat, pw.place.lon)
@@ -214,7 +218,7 @@ func fetchLocationData(parCtx context.Context, c *http.Client, loc location) <-c
 		pch := fetchPlaces(ctx, c, loc)
 
 		var weatherRes result[weather]
-		var placesRes result[[]placeWithDescription]
+		var placesRes result[[]place]
 
 		select {
 		case weatherRes = <-wch:
@@ -241,7 +245,7 @@ func fetchLocationData(parCtx context.Context, c *http.Client, loc location) <-c
 		}
 
 		places := placesRes.value
-		if len(places) == 0 {
+		if places[0].xid == "" {
 			cr := combinedResult{
 				loc:     loc,
 				weather: weatherRes.value,
@@ -253,17 +257,16 @@ func fetchLocationData(parCtx context.Context, c *http.Client, loc location) <-c
 
 		descCh := make(chan result[placeWithDescription], len(places))
 		for _, p := range places {
-			pl := p.place
 			go func() {
-				dch := fetchDescription(ctx, c, pl.pageId)
+				dch := fetchDescription(ctx, c, p.xid)
 				select {
 				case dr := <-dch:
 					if dr.err != nil {
-						descCh <- result[placeWithDescription]{err: fmt.Errorf("desc error for %s: %w", pl.title, dr.err)}
+						descCh <- result[placeWithDescription]{err: fmt.Errorf("desc error for %s: %w", p.title, dr.err)}
 						return
 					}
 					descCh <- result[placeWithDescription]{value: placeWithDescription{
-						place:       pl,
+						place:       p,
 						description: dr.value,
 					}}
 				case <-ctx.Done():
@@ -300,13 +303,107 @@ func fetchLocationData(parCtx context.Context, c *http.Client, loc location) <-c
 }
 
 func fetchLocationWeather(ctx context.Context, c *http.Client, loc location) <-chan result[weather] {
-	return nil
+	ch := make(chan result[weather])
+	go func() {
+		defer close(ch)
+		v := url.Values{}
+		v.Set("lat", strconv.FormatFloat(loc.lat, 'f', -1, 64))
+		v.Set("lon", strconv.FormatFloat(loc.lon, 'f', -1, 64))
+		v.Set("appid", weather_api)
+		v.Set("units", "metric")
+		u := base_loc_weather + "?" + v.Encode()
+
+		var resp struct {
+			Main struct {
+				Temp  float64 `json:"temp"`
+				Feels float64 `json:"feels_like"`
+			} `json:"main"`
+			Wind struct {
+				Speed float64 `json:"speed"`
+				Gust  float64 `json:"gust"`
+			} `json:"wind"`
+		}
+
+		if err := fetchJSON(ctx, c, u, nil, &resp); err != nil {
+			ch <- result[weather]{err: err}
+			return
+		}
+
+		w := weather{
+			temp:      resp.Main.Temp,
+			feels:     resp.Main.Feels,
+			windSpeed: resp.Wind.Speed,
+			windGusts: resp.Wind.Gust,
+		}
+		ch <- result[weather]{value: w}
+	}()
+
+	return ch
 }
 
-func fetchPlaces(ctx context.Context, c *http.Client, loc location) <-chan result[[]placeWithDescription] {
-	return nil
+func fetchPlaces(ctx context.Context, c *http.Client, loc location) <-chan result[[]place] {
+	ch := make(chan result[[]place])
+	go func() {
+		defer close(ch)
+		v := url.Values{}
+		v.Set("radius", "250")
+		v.Set("lon", strconv.FormatFloat(loc.lon, 'f', -1, 64))
+		v.Set("lat", strconv.FormatFloat(loc.lat, 'f', -1, 64))
+		v.Set("apikey", places_api)
+		v.Set("format", "json")
+		v.Set("limit", "10")
+		u := base_places_rad + "?" + v.Encode()
+
+		var resp struct {
+			Name  string `json:"name"`
+			Xid   string `json:"xid"`
+			Point struct {
+				Lon float64 `json:"lon"`
+				Lat float64 `json:"lat"`
+			} `json:"point"`
+		}
+
+		if err := fetchJSON(ctx, c, u, nil, &resp); err != nil {
+			ch <- result[[]place]{err: err}
+			return
+		}
+
+		places := make([]place, 0)
+		places = append(places, place{
+			xid:   "",
+			title: resp.Name,
+			lon:   resp.Point.Lon,
+			lat:   resp.Point.Lat,
+		})
+
+		ch <- result[[]place]{value: places}
+	}()
+
+	return ch
 }
 
-func fetchDescription(ctx context.Context, client *http.Client, pageid int) <-chan result[string] {
-	return nil
+func fetchDescription(ctx context.Context, c *http.Client, xid string) <-chan result[string] {
+	ch := make(chan result[string])
+	go func() {
+		defer close(ch)
+		v := url.Values{}
+		v.Set("xid", xid)
+		v.Set("apikey", places_api)
+		u := base_places_desc + "?" + v.Encode()
+
+		var resp struct {
+			Info struct {
+				Desc string `json:"descr"`
+			} `json:"info"`
+		}
+
+		if err := fetchJSON(ctx, c, u, nil, &resp); err != nil {
+			ch <- result[string]{err: err}
+			return
+		}
+
+		ch <- result[string]{value: resp.Info.Desc}
+	}()
+
+	return ch
 }
