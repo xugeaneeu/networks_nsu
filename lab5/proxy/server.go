@@ -37,6 +37,6 @@ func (s *SocksProxy) Serve() error {
 			return err
 		}
 
-		go proxy.handleConn(conn)
+		go HandleConn(conn)
 	}
 }

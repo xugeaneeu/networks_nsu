@@ -1,10 +1,5 @@
 package socks
 
-import (
-	"errors"
-	"io"
-)
-
 const (
 	Ver          = 0x05
 	MethodNoAuth = 0x00
@@ -30,34 +25,54 @@ var (
 	RepSuccessConst   = RepSuccess
 )
 
-type Request struct {
-	Cmd  byte
-	Atyp byte
-	Addr string
-	Port uint16
+type Socks5HandshakeRequest struct {
+	Version  byte
+	NMethods byte
+	Methods  []byte
 }
 
-func ReadMethodSelection(r io.Reader) ([]byte, error) {
-	header := make([]byte, 2)
-
-	if _, err := io.ReadFull(r, header); err != nil {
-		return nil, err
-	}
-	if header[0] != Ver {
-		return nil, errors.New("unsupported socks version")
-	}
-
-	methods := make([]byte, header[1])
-	if header[1] > 0 {
-		if _, err := io.ReadFull(r, methods); err != nil {
-			return nil, err
-		}
-	}
-
-	return methods, nil
+type Socks5HandshakeReply struct {
+	Version byte
+	Method  byte
 }
 
-func WriteMethodChoice(w io.Writer, method byte) error {
-	_, err := w.Write([]byte{Ver, method})
-	return err
+type Socks5Request struct {
+	Version  byte
+	Cmd      byte
+	AddrType byte
+	Addr     string
+	Port     uint16
 }
+
+type Socks5Reply struct {
+	Version  byte
+	Rep      byte
+	AddrType byte
+	Addr     string
+	Port     uint16
+}
+
+// func ReadMethodSelection(r io.Reader) ([]byte, error) {
+// 	header := make([]byte, 2)
+
+// 	if _, err := io.ReadFull(r, header); err != nil {
+// 		return nil, err
+// 	}
+// 	if header[0] != Ver {
+// 		return nil, errors.New("unsupported socks version")
+// 	}
+
+// 	methods := make([]byte, header[1])
+// 	if header[1] > 0 {
+// 		if _, err := io.ReadFull(r, methods); err != nil {
+// 			return nil, err
+// 		}
+// 	}
+
+// 	return methods, nil
+// }
+
+// func WriteMethodChoice(w io.Writer, method byte) error {
+// 	_, err := w.Write([]byte{Ver, method})
+// 	return err
+// }
