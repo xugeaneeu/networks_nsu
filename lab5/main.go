@@ -1,16 +1,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"networks_nsu/lab5/proxy"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 )
 
 const (
 	min_user_port = 1024
 	max_user_port = 65535
-	buffer_size   = 1 << 15
 )
 
 func main() {
@@ -24,6 +27,28 @@ func main() {
 
 	addr := ":" + strconv.Itoa(*port)
 
-	proxy := proxy.NewSocksProxy()
+	serv := proxy.NewSocksProxy()
+	if err := serv.Up(addr); err != nil {
+		return
+	}
 
+	servErr := make(chan error, 1)
+	go func() {
+		if err := serv.Serve(); err != nil {
+			servErr <- err
+		}
+	}()
+
+	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	<-ctx.Done()
+	slog.Info("shutdown signal received")
+
+	if err := serv.Close(); err != nil {
+		slog.Error("server graceful shutdown failed", "error", err)
+	} else {
+		slog.Info("server gracefully stopped")
+	}
 }

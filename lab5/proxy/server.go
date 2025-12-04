@@ -37,6 +37,17 @@ func (s *SocksProxy) Serve() error {
 			return err
 		}
 
-		go HandleConn(conn)
+		go func() {
+			serv := newSession(conn)
+			if err := serv.Serve(); err != nil {
+				slog.Error("error while serving new connection", "error", err)
+				return 
+			}
+			
+		}
 	}
+}
+
+func (s *SocksProxy) Close() error {
+	return s.listener.Close()
 }
