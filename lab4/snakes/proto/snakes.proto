@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package snakes;
 
-option go_package = "xugeaneeu/newtworks_nsu/lab4/proto";
+option go_package = "networks_nsu/lab4/proto";
 
 
 // Роль узла в топологии связей узлов в пределах игры
@@ -40,7 +40,7 @@ message GameConfig {
 
 /* Игроки конкретной игры */
 message GamePlayers {
-  GamePlayer players = 1; // Список всех игроков
+  repeated GamePlayer players = 1; // Список всех игроков
 }
 
 enum Direction {
