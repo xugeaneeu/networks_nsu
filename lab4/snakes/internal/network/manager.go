@@ -23,7 +23,6 @@ type sentMessage struct {
 	attempts int
 }
 
-// ReceivedMessage содержит данные и адрес отправителя
 type ReceivedMessage struct {
 	Payload *pb.GameMessage
 	Addr    *net.UDPAddr
@@ -37,8 +36,6 @@ type Manager struct {
 }
 
 func NewManager() (*Manager, error) {
-	// 1. Unicast сокет (биндимся на случайный свободный порт :0)
-	// net.ResolveUDPAddr здесь не обязателен для ":0", но полезен для единообразия
 	uAddr, err := net.ResolveUDPAddr("udp", ":0")
 	if err != nil {
 		return nil, fmt.Errorf("resolve unicast: %w", err)
@@ -48,7 +45,6 @@ func NewManager() (*Manager, error) {
 		return nil, fmt.Errorf("listen unicast: %w", err)
 	}
 
-	// 2. Multicast сокет
 	mAddr, err := net.ResolveUDPAddr("udp", MulticastAddr)
 	if err != nil {
 		uConn.Close()
@@ -68,14 +64,11 @@ func NewManager() (*Manager, error) {
 	}, nil
 }
 
-// GetLocalAddrString возвращает "IP:Port" текущего узла для отображения или отправки в Announcement
 func (m *Manager) GetLocalAddrString() string {
-	// Получаем порт, который выдала ОС
 	port := m.unicastConn.LocalAddr().(*net.UDPAddr).Port
 	return fmt.Sprintf("%s:%d", getOutboundIP(), port)
 }
 
-// Events возвращает канал для чтения
 func (m *Manager) Events() <-chan ReceivedMessage {
 	return m.incomingCh
 }
@@ -95,9 +88,7 @@ func (m *Manager) Close() {
 	close(m.incomingCh)
 }
 
-// SendUnicast отправляет сообщение по строковому адресу (напр. "192.168.1.5:45000")
 func (m *Manager) SendUnicast(msg *pb.GameMessage, addrStr string) error {
-	// Используем стандартный резолвер
 	dst, err := net.ResolveUDPAddr("udp", addrStr)
 	if err != nil {
 		return fmt.Errorf("resolve addr %s: %w", addrStr, err)
@@ -105,13 +96,12 @@ func (m *Manager) SendUnicast(msg *pb.GameMessage, addrStr string) error {
 	return m.send(msg, m.unicastConn, dst)
 }
 
-// SendMulticast отправляет сообщение всем
 func (m *Manager) SendMulticast(msg *pb.GameMessage) error {
 	dst, err := net.ResolveUDPAddr("udp", MulticastAddr)
 	if err != nil {
 		return err
 	}
-	// Отправляем через Unicast сокет, чтобы ответ пришел нам
+
 	return m.send(msg, m.unicastConn, dst)
 }
 
@@ -133,28 +123,22 @@ func (m *Manager) listenLoop(ctx context.Context, conn *net.UDPConn, name string
 		case <-ctx.Done():
 			return
 		default:
-			// Устанавливаем дедлайн чтения, чтобы горутина могла проверить ctx.Done()
-			// Однако, для простоты (чтобы не спамить в лог ошибками таймаута) оставим блокирующим.
-			// При m.Close() ReadFromUDP вернет ошибку и мы выйдем.
 			n, srcAddr, err := conn.ReadFromUDP(buf)
 			if err != nil {
-				// Если контекст отменен или сокет закрыт - выходим
 				select {
 				case <-ctx.Done():
 					return
 				default:
 					log.Printf("Network read error (%s): %v", name, err)
-					continue // Или return, если ошибка фатальна
+					continue
 				}
 			}
 
-			// Копируем данные
 			data := make([]byte, n)
 			copy(data, buf[:n])
 
 			var msg pb.GameMessage
 			if err := proto.Unmarshal(data, &msg); err != nil {
-				// Это нормально в UDP - могут прийти битые пакеты или мусор
 				continue
 			}
 
@@ -163,13 +147,11 @@ func (m *Manager) listenLoop(ctx context.Context, conn *net.UDPConn, name string
 			case <-ctx.Done():
 				return
 			default:
-				// Дропаем пакет, если канал переполнен (Slow Consumer)
 			}
 		}
 	}
 }
 
-// getOutboundIP - приватный хелпер для определения локального IP
 func getOutboundIP() string {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {

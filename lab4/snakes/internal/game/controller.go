@@ -126,9 +126,7 @@ func (c *Controller) processNetworkMessages() {
 	select {
 	case msg := <-c.Net.Events():
 		if msg.Payload.SenderId != 0 {
-			// [DEBUG] Видим ли мы вообще пакеты от других?
 			if c.MyRole == RoleMaster {
-				// log.Printf("[DEBUG-NET] Got msg type %T from ID %d", msg.Payload.Type, msg.Payload.SenderId)
 			}
 			c.touchPeer(msg.Payload.SenderId)
 		}
@@ -144,28 +142,22 @@ func (c *Controller) processNetworkMessages() {
 			}
 
 		case *pb.GameMessage_RoleChange:
-			// Всегда подтверждаем смену роли
 			c.sendAck(msg.Payload.MsgSeq, msg.Payload.SenderId, msg.Addr.String())
 
 			rc := payload.RoleChange
 
-			// Нас повысили до Заместителя
 			if rc.ReceiverRole == pb.NodeRole_DEPUTY {
 				log.Println("Promoted to DEPUTY")
 				c.MyRole = RoleDeputy
 			}
 
-			// Кто-то стал новым Мастером
 			if rc.SenderRole == pb.NodeRole_MASTER {
 				log.Printf("New Master detected: %s (ID %d)", msg.Addr.String(), msg.Payload.SenderId)
 				c.MasterAddr = msg.Addr.String()
 				c.touchPeer(msg.Payload.SenderId)
 
-				// [FIX] Сразу обновляем роль нового мастера в локальном стейте,
-				// чтобы checkTimeouts не убил старого мастера повторно.
 				c.Core.SetPlayerRole(msg.Payload.SenderId, pb.NodeRole_MASTER)
 
-				// Разжалуем старых мастеров в списке (визуально и логически), чтобы был только один
 				for _, p := range c.Core.State.Players.Players {
 					if p.Role == pb.NodeRole_MASTER && p.Id != msg.Payload.SenderId {
 						p.Role = pb.NodeRole_NORMAL
@@ -196,7 +188,6 @@ func (c *Controller) processNetworkMessages() {
 		case *pb.GameMessage_Error:
 			log.Printf("Error: %s", payload.Error.ErrorMessage)
 		case *pb.GameMessage_Ping:
-			// Ping обработан в touchPeer
 		}
 	default:
 	}
@@ -209,10 +200,8 @@ func (c *Controller) checkTimeouts() {
 
 	// 1. ЛОГИКА МАСТЕРА
 	if c.MyRole == RoleMaster {
-		// [DEBUG] Проверка Grace Period
 		graceTime := c.becomingMasterTime.Add(NodeTimeout + 1*time.Second)
 		if now.Before(graceTime) {
-			// Мы еще в защитном периоде
 			return
 		}
 
@@ -232,10 +221,6 @@ func (c *Controller) checkTimeouts() {
 					c.Core.RemovePlayer(p.Id)
 					delete(c.peers, p.Id)
 				}
-			} else {
-				// Если пира нет в карте, но он есть в игроках - это странно, но кикаем
-				// log.Printf("[DEBUG-TIMEOUT] Player %d not in peers map. Killing.", p.Id)
-				// c.Core.RemovePlayer(p.Id)
 			}
 		}
 
@@ -289,17 +274,13 @@ func (c *Controller) keepAlive() {
 			}
 
 			if masterID != -1 {
-				// Проверяем, надо ли слать пинг мастеру
 				status, known := c.peers[masterID]
 				if !known {
-					// [DEBUG] Мы не знаем мастера в peers, хотя должны!
 					c.touchPeer(masterID)
 					status = c.peers[masterID]
 				}
 
 				if now.Sub(status.LastSent) > PingInterval {
-					// [DEBUG-PING] Слабо комментируем, чтобы не спамить, но можно раскомментить
-					// log.Printf("[DEBUG-PING] Sending PING to Master ID %d (%s)", masterID, c.MasterAddr)
 					c.Net.SendUnicast(ping, c.MasterAddr)
 					c.markSent(masterID)
 				}
@@ -347,15 +328,14 @@ func (c *Controller) becomeMaster() {
 	c.becomingMasterTime = time.Now()
 	log.Printf("[DEBUG] BecomeMaster at %v. Grace period starts.", c.becomingMasterTime)
 
-	// [FIX] Сначала разжалуем ВСЕХ текущих мастеров в NORMAL
-	// Чтобы в стейте гарантированно остался только один (Я)
+	// Сначала всех текущих мастеров в NORMAL
+	// Чтобы в стейте гарантированно остался только один
 	for _, p := range c.Core.State.Players.Players {
 		if p.Role == pb.NodeRole_MASTER {
 			p.Role = pb.NodeRole_NORMAL
 		}
 	}
 
-	// Теперь назначаем себя
 	c.Core.SetPlayerRole(c.MyID, pb.NodeRole_MASTER)
 
 	log.Println("I am the Master now. Old masters demoted.")
